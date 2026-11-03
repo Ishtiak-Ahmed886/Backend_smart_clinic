@@ -449,6 +449,8 @@ class ChamberSessionView(APIView):
                 session_date=session_date,
                 defaults={'status': ChamberSessionStatus.NOT_STARTED, 'current_serial': 0}
             )
+            initial_status = session.status
+            initial_delay = session.delay_minutes or 0
 
             if action == 'ADMIT_EMERGENCY':
                 if session.status == ChamberSessionStatus.ENDED:
@@ -713,9 +715,9 @@ class ChamberSessionView(APIView):
                 import logging
                 logging.getLogger(__name__).warning(f"Proximity SMS dispatch error: {e}")
 
-        # Delay Broadcast Trigger: Only when delay_minutes is newly increased (> 0 and changed from old_delay)
+        # Delay Broadcast Trigger: Only when delay_minutes is newly increased (> 0 and changed from initial_delay)
         new_delay = session.delay_minutes or 0
-        if new_delay > 0 and new_delay != old_delay and ('delay_minutes' in data or action in ['UPDATE_STATUS', 'UPDATE_DELAY']):
+        if new_delay > 0 and new_delay != initial_delay and ('delay_minutes' in data or action in ['UPDATE_STATUS', 'UPDATE_DELAY']):
             try:
                 from apps.appointments.models import Appointment, AppointmentStatus
                 from apps.appointments.services import format_doctor_display_name
@@ -747,6 +749,38 @@ class ChamberSessionView(APIView):
                     )
             except Exception:
                 pass  # Non-blocking SMS dispatch
+
+        # Early Chamber End Notification: Notify unserved patients if session newly concluded with remaining queue
+        if session.status == ChamberSessionStatus.ENDED and initial_status != ChamberSessionStatus.ENDED:
+            try:
+                from apps.appointments.models import Appointment, AppointmentStatus
+                from apps.appointments.services import format_doctor_display_name
+                from apps.notifications.sms_service import send_sms_notification
+                from apps.notifications.models import NotificationType
+
+                unserved_apts = Appointment.objects.filter(
+                    doctor_id=session.doctor_id,
+                    clinic_id=session.clinic_id,
+                    appointment_date=session.session_date,
+                    status__in=[AppointmentStatus.CONFIRMED, AppointmentStatus.PENDING]
+                ).select_related('patient', 'family_member', 'doctor', 'clinic')
+
+                for apt in unserved_apts:
+                    patient_name = apt.family_member.full_name if apt.family_member else f"{apt.patient.first_name} {apt.patient.last_name}".strip()
+                    doc_display = format_doctor_display_name(apt.doctor)
+                    send_sms_notification(
+                        recipient=apt.patient,
+                        title="Chamber Closed for Today ℹ️",
+                        message=(
+                            f"Dear {patient_name}, {doc_display}'s chamber session at {apt.clinic.name} has concluded. "
+                            f"Your appointment (Serial #{apt.serial_number}) could not be completed today. "
+                            f"Please contact clinic reception for priority rescheduling or refund resolution."
+                        ),
+                        notification_type=NotificationType.SYSTEM,
+                        phone=apt.patient.phone
+                    )
+            except Exception:
+                pass
 
         return Response(ChamberSessionSerializer(session).data, status=status.HTTP_200_OK)
 

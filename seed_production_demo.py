@@ -9,11 +9,13 @@ os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'config.settings')
 django.setup()
 
 from apps.accounts.models import User, UserRole, FamilyMember
-from apps.clinics.models import Clinic
+from apps.clinics.models import Clinic, ClinicStaff, StaffRole
 from apps.doctors.models import Doctor, DoctorClinic, Specialization, DoctorSchedule, ChamberSession, ChamberSessionStatus
 from apps.appointments.models import Appointment, AppointmentStatus
 from apps.prescriptions.models import Prescription, PrescribedMedication, Medication, MedicationForm
 from apps.notifications.models import Notification, NotificationType
+from apps.payments.models import Payment, PaymentMethod, PaymentStatus
+from apps.reviews.models import Review
 
 print("=== Starting Real-Life Data Seeding ===")
 
@@ -27,9 +29,17 @@ demo_accounts = [
     ("khudezababy@gmail.com", UserRole.CLINIC_ADMIN, "Khudeza", "Begum"),
     ("lubna@gmail.com", UserRole.DOCTOR, "Dr. Naznin Jahan", "Lubna"),
     ("mohosina@gmail.com", UserRole.DOCTOR, "Dr. Mohosina", "Akter"),
+    ("dr.nusrat@smartclinic.bd", UserRole.DOCTOR, "Dr. Nusrat", "Jahan"),
+    ("rahela_counter@clinic.test", UserRole.RECEPTIONIST, "Rahela", "Begum"),
+    ("receptionist@clinic.com", UserRole.RECEPTIONIST, "Tania", "Akter"),
     ("alif@gmail.com", UserRole.PATIENT, "Alif", "Khan"),
     ("monjurul@gmail.com", UserRole.PATIENT, "Monjurul", "Hasan"),
     ("ramin@gmail.com", UserRole.PATIENT, "Ashfakur Rahman", "Ramin"),
+    ("tariq@gmail.com", UserRole.PATIENT, "Tariqul", "Islam"),
+    ("sadia@gmail.com", UserRole.PATIENT, "Sadia", "Afrin"),
+    ("anika@gmail.com", UserRole.PATIENT, "Anika", "Tabassum"),
+    ("hasan@gmail.com", UserRole.PATIENT, "Hasan", "Mahmud"),
+    ("farhana@gmail.com", UserRole.PATIENT, "Farhana", "Yasmin"),
 ]
 
 for email, role, fname, lname in demo_accounts:
@@ -64,8 +74,22 @@ Clinic.all_objects.filter(name='string').delete()
 
 metro_clinic = Clinic.objects.filter(owner__email="ish@gmail.com").first()
 if not metro_clinic:
+    metro_clinic = Clinic.objects.filter(name__icontains="Metro").first()
+if not metro_clinic:
     metro_clinic = Clinic.objects.filter(name__icontains="ABC").first()
-if metro_clinic:
+if not metro_clinic:
+    metro_clinic = Clinic.objects.create(
+        name="Metro Health Hub",
+        city="Dhaka",
+        address="House 12, Road 4, Sector 7, Uttara, Dhaka-1230",
+        phone="+8801788888888",
+        email="metrohealth@clinic.test",
+        is_active=True,
+        latitude=23.8759,
+        longitude=90.3795,
+        logo_url="https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=150&auto=format&fit=crop&q=80",
+    )
+else:
     metro_clinic.name = "Metro Health Hub"
     metro_clinic.city = "Dhaka"
     metro_clinic.address = "House 12, Road 4, Sector 7, Uttara, Dhaka-1230"
@@ -75,6 +99,29 @@ if metro_clinic:
     metro_clinic.longitude = 90.3795
     metro_clinic.logo_url = "https://images.unsplash.com/photo-1586773860418-d37222d8fce3?w=150&auto=format&fit=crop&q=80"
     metro_clinic.save()
+
+# Link Receptionists to Metro Health Hub
+for r_email, r_name in [("rahela_counter@clinic.test", "Rahela Begum"), ("receptionist@clinic.com", "Tania Akter")]:
+    r_user = User.objects.filter(email=r_email).first()
+    if r_user and metro_clinic:
+        ClinicStaff.objects.update_or_create(
+            user=r_user,
+            defaults={
+                "clinic": metro_clinic,
+                "name": r_name,
+                "phone": "+8801712000000",
+                "role": StaffRole.RECEPTIONIST,
+                "is_active": True,
+                "monthly_salary": Decimal("25000.00"),
+                "permissions": {
+                    "can_call_next": True,
+                    "can_add_walkin": True,
+                    "can_receive_cash": True,
+                    "can_mark_attendance": True
+                }
+            }
+        )
+print("Linked Receptionists to Metro Health Hub.")
 
 abedin_clinic = Clinic.objects.filter(owner__email="monira@gmail.com").first()
 if not abedin_clinic:
@@ -145,6 +192,17 @@ DoctorSchedule.all_objects.all().delete()
 
 # 4. Doctors & Specializations & Clinic Links
 doc_configs = [
+    {
+        "email": "dr.nusrat@smartclinic.bd",
+        "full_name": "Nusrat Jahan",
+        "qualification": "MBBS, FCPS (Medicine), MD (Cardiology)",
+        "bio": "Senior Consultant Physician specializing in general medicine, dynamic outpatient care, and hypertension management.",
+        "specs": ["Cardiology", "General Medicine"],
+        "experience_years": 11,
+        "phone": "+8801755112233",
+        "avatar_url": "https://images.unsplash.com/photo-1559839734-2b71ea197ec2?w=150&auto=format&fit=crop&q=80",
+        "clinics": [(metro_clinic, Decimal("800.00")), (abedin_clinic, Decimal("800.00"))],
+    },
     {
         "email": "mohosina@gmail.com",
         "full_name": "Mohosina Akter",
@@ -408,7 +466,32 @@ if metro_clinic:
     )
     print(f"Sample E-Prescription seeded with QR Token: {demo_token}")
 
-    # Upcoming Confirmed Appointment for Alif today
+    # Payment and Review for sample completed appointment
+    Payment.objects.update_or_create(
+        appointment=sample_app,
+        defaults={
+            "amount": sample_app.amount or Decimal("600.00"),
+            "currency": "BDT",
+            "payment_method": PaymentMethod.BKASH,
+            "transaction_id": "TRX987216345BK",
+            "val_id": "VAL987216345",
+            "bank_tran_id": "BANK77665544",
+            "card_type": "BKASH-BKash",
+            "payment_status": PaymentStatus.COMPLETED,
+        }
+    )
+    Review.objects.update_or_create(
+        appointment=sample_app,
+        defaults={
+            "patient": sample_app.patient,
+            "doctor": sample_app.doctor,
+            "clinic": sample_app.clinic,
+            "rating": 5,
+            "comment": "Exceptional consultation. The doctor took time to listen attentively and explained the prescription thoroughly.",
+        }
+    )
+
+    # Upcoming Confirmed Appointment for Alif today with Dr. Mohosina
     upcoming_app = Appointment.objects.filter(
         patient=patient_alif,
         doctor=active_doc,
@@ -432,6 +515,89 @@ if metro_clinic:
         upcoming_app.serial_number = 6
         upcoming_app.amount = Decimal("600.00")
         upcoming_app.save()
+
+    Payment.objects.update_or_create(
+        appointment=upcoming_app,
+        defaults={
+            "amount": Decimal("600.00"),
+            "currency": "BDT",
+            "payment_method": PaymentMethod.BKASH,
+            "transaction_id": f"TRX{today.strftime('%Y%m%d')}006BK",
+            "payment_status": PaymentStatus.COMPLETED,
+        }
+    )
+
+# 9. Realistic Queue and Live Chamber Session for Dr. Nusrat Jahan at Metro Health Hub
+doc_nusrat = Doctor.objects.filter(email="dr.nusrat@smartclinic.bd").first()
+if metro_clinic and doc_nusrat:
+    ChamberSession.all_objects.filter(doctor=doc_nusrat, clinic=metro_clinic, session_date=today).delete()
+    session_nusrat = ChamberSession.objects.create(
+        doctor=doc_nusrat,
+        clinic=metro_clinic,
+        session_date=today,
+        status=ChamberSessionStatus.IN_CHAMBER,
+        current_serial=4,
+        estimated_mins_per_patient=10,
+        delay_minutes=0,
+        announcement_note="Dr. Nusrat Jahan is currently seeing serial #4 in Room 201.",
+        room_number="Room 201",
+        started_at=datetime.datetime.now(datetime.timezone.utc)
+    )
+    print(f"Created active live ChamberSession for Dr. Nusrat (Room 201, Current Serial: 4)")
+
+    queue_data = [
+        ("tariq@gmail.com", 1, datetime.time(9, 0), AppointmentStatus.COMPLETED, "Regular follow-up for hypertension management.", PaymentMethod.CASH),
+        ("sadia@gmail.com", 2, datetime.time(9, 20), AppointmentStatus.COMPLETED, "Chest tightness and fatigue after morning walks.", PaymentMethod.BKASH),
+        ("anika@gmail.com", 3, datetime.time(9, 40), AppointmentStatus.COMPLETED, "Palpitation and shortness of breath when climbing stairs.", PaymentMethod.NAGAD),
+        ("hasan@gmail.com", 4, datetime.time(10, 0), AppointmentStatus.IN_CHAMBER, "Acute dizziness and fluctuating blood pressure readings.", PaymentMethod.CASH),
+        ("farhana@gmail.com", 5, datetime.time(10, 20), AppointmentStatus.CONFIRMED, "Review of 24h Holter monitoring and lipid profile.", PaymentMethod.BKASH),
+        ("alif@gmail.com", 6, datetime.time(10, 40), AppointmentStatus.CONFIRMED, "Routine cardiovascular evaluation and prescription renewal.", PaymentMethod.BKASH),
+        ("monjurul@gmail.com", 7, datetime.time(11, 0), AppointmentStatus.CONFIRMED, "Post-workout elevated pulse and anxiety check.", PaymentMethod.CASH),
+        ("ramin@gmail.com", 8, datetime.time(11, 20), AppointmentStatus.CONFIRMED, "Severe sudden chest discomfort and sweating (Emergency Triage).", PaymentMethod.BKASH),
+    ]
+
+    for p_email, serial, app_time, status, reason, pay_method in queue_data:
+        p_user = User.objects.get(email=p_email)
+        app = Appointment.objects.filter(
+            doctor=doc_nusrat,
+            clinic=metro_clinic,
+            appointment_date=today,
+            serial_number=serial,
+        ).first()
+        if not app:
+            app = Appointment.objects.create(
+                patient=p_user,
+                doctor=doc_nusrat,
+                clinic=metro_clinic,
+                appointment_date=today,
+                appointment_time=app_time,
+                amount=Decimal("800.00"),
+                status=status,
+                serial_number=serial,
+                problem_description=reason,
+            )
+        else:
+            app.patient = p_user
+            app.appointment_time = app_time
+            app.amount = Decimal("800.00")
+            app.status = status
+            app.problem_description = reason
+            app.save()
+
+        # Ensure Payment record
+        Payment.objects.update_or_create(
+            appointment=app,
+            defaults={
+                "amount": Decimal("800.00"),
+                "currency": "BDT",
+                "payment_method": pay_method,
+                "transaction_id": f"TRX{today.strftime('%Y%m%d')}{serial:03d}BD",
+                "val_id": f"VAL{serial:03d}",
+                "payment_status": PaymentStatus.COMPLETED,
+            }
+        )
+
+    print("Seeded realistic 8-patient queue for Dr. Nusrat Jahan with full payment records.")
 
 # Notification for Alif
 Notification.objects.create(
