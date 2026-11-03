@@ -641,3 +641,53 @@ class PublicWaitingRoomQueueView(APIView):
 
 
 
+
+
+class AppointmentStatsSummaryView(APIView):
+    """
+    Returns accurate aggregate breakdown of appointments across the platform for Admin.
+    Or scoped to clinic/doctor if requested.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        user = request.user
+        from django.db.models import Count
+        queryset = Appointment.objects.all()
+
+        if user.role == 'CLINIC_ADMIN':
+            queryset = queryset.filter(clinic__owner=user)
+        elif user.role == 'RECEPTIONIST':
+            staff = getattr(user, 'staff_profile', None)
+            if staff:
+                queryset = queryset.filter(clinic=staff.clinic)
+            else:
+                queryset = queryset.none()
+        elif user.role == 'DOCTOR':
+            doctor_profile = getattr(user, 'doctor_profile', None)
+            if doctor_profile:
+                queryset = queryset.filter(doctor=doctor_profile)
+            else:
+                queryset = queryset.filter(doctor__email=user.email)
+        elif user.role == 'PATIENT':
+            queryset = queryset.filter(patient=user)
+        # ADMIN sees all platform appointments
+
+        breakdown = queryset.values('status').annotate(count=Count('id'))
+        status_map = {
+            'PENDING': 0,
+            'CONFIRMED': 0,
+            'COMPLETED': 0,
+            'CANCELLED': 0,
+        }
+        total = 0
+        for b in breakdown:
+            st = b['status']
+            cnt = b['count']
+            status_map[st] = cnt
+            total += cnt
+
+        return Response({
+            'total': total,
+            'breakdown': status_map,
+        }, status=status.HTTP_200_OK)

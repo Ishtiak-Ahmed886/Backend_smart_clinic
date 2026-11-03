@@ -8,12 +8,14 @@ from .views import (
     AppointmentEmergencyFlagView,
     PublicLiveQueueTrackView,
     PublicWaitingRoomQueueView,
+    AppointmentStatsSummaryView,
 )
 
 app_name = 'appointments'
 
 urlpatterns = [
     path('', AppointmentListCreateView.as_view(), name='appointment_list_create'),
+    path('stats/summary/', AppointmentStatsSummaryView.as_view(), name='appointment_stats_summary'),
     path('queue/public/', PublicWaitingRoomQueueView.as_view(), name='appointment_public_queue'),
     path('<uuid:pk>/', AppointmentDetailView.as_view(), name='appointment_detail'),
     path('<uuid:pk>/track/', PublicLiveQueueTrackView.as_view(), name='appointment_track_queue'),
