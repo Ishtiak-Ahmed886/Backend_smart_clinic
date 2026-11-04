@@ -295,6 +295,13 @@ class AppointmentCompleteView(generics.GenericAPIView):
                 status=status.HTTP_403_FORBIDDEN
             )
 
+        if not appointment.is_emergency:
+            from apps.prescriptions.models import Prescription
+            if not Prescription.objects.filter(appointment=appointment).exists():
+                return Response({
+                    'detail': f'Cannot complete appointment. Please issue a digital prescription for Serial #{appointment.serial_number} first.'
+                }, status=status.HTTP_400_BAD_REQUEST)
+
         appointment = complete_appointment(appointment=appointment)
         return Response(AppointmentSerializer(appointment).data, status=status.HTTP_200_OK)
 

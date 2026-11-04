@@ -280,8 +280,8 @@ def cancel_appointment(*, appointment: Appointment, cancelled_by_user) -> Appoin
 
 
 def complete_appointment(*, appointment: Appointment) -> Appointment:
-    if appointment.status != AppointmentStatus.CONFIRMED:
-        raise ValidationError({"status": "Only confirmed appointments can be marked as completed."})
+    if appointment.status in [AppointmentStatus.CANCELLED, AppointmentStatus.COMPLETED]:
+        return appointment
     appointment.status = AppointmentStatus.COMPLETED
     if not appointment.is_arrived:
         appointment.is_arrived = True
@@ -506,12 +506,16 @@ def rollover_unserved_appointments(
             target_time = curr_dt.time()
             booked_times.add(target_time)
 
+            apt.rolled_over_from_date = session_date
+            apt.original_serial_number = apt.serial_number
+            apt.original_appointment_time = apt.appointment_time
             apt.appointment_date = target_date
             apt.appointment_time = target_time
             apt.serial_number = next_serial
             apt.is_arrived = False
             apt.arrived_at = None
             apt.save(update_fields=[
+                'rolled_over_from_date', 'original_serial_number', 'original_appointment_time',
                 'appointment_date', 'appointment_time', 'serial_number',
                 'is_arrived', 'arrived_at', 'updated_at'
             ])
@@ -540,6 +544,82 @@ def rollover_unserved_appointments(
                 pass
 
     return rescheduled_list
+
+
+def revert_session_rollover(
+    *,
+    doctor_id: str,
+    clinic_id: str,
+    session_date: date
+) -> list:
+    """
+    Reverts a session rollover by moving patients who were rolled over from this session
+    back to their original session date, restoring original serial numbers and slot times.
+    Re-aligns the serial numbers on the target dates for any remaining/newly booked patients.
+    Notifies restored patients via SMS.
+    """
+    rolled_over_apts = list(Appointment.objects.filter(
+        doctor_id=doctor_id,
+        clinic_id=clinic_id,
+        rolled_over_from_date=session_date
+    ).exclude(status=AppointmentStatus.CANCELLED).order_by('original_serial_number', 'created_at'))
+
+    if not rolled_over_apts:
+        return []
+
+    target_dates = set(apt.appointment_date for apt in rolled_over_apts)
+    restored_list = []
+
+    with transaction.atomic():
+        for apt in rolled_over_apts:
+            apt.appointment_date = session_date
+            if apt.original_serial_number:
+                apt.serial_number = apt.original_serial_number
+            if apt.original_appointment_time:
+                apt.appointment_time = apt.original_appointment_time
+            apt.rolled_over_from_date = None
+            apt.original_serial_number = None
+            apt.original_appointment_time = None
+            apt.save(update_fields=[
+                'appointment_date', 'serial_number', 'appointment_time',
+                'rolled_over_from_date', 'original_serial_number', 'original_appointment_time',
+                'updated_at'
+            ])
+            restored_list.append(apt)
+
+            try:
+                from apps.notifications.sms_service import send_sms_notification
+                from apps.notifications.models import NotificationType
+                doc_display = format_doctor_display_name(apt.doctor)
+                time_str = apt.appointment_time.strftime('%I:%M %p').lstrip('0') if hasattr(apt.appointment_time, 'strftime') else str(apt.appointment_time)
+                send_sms_notification(
+                    recipient=apt.patient,
+                    title="Chamber Session Resumed Today 🗓️",
+                    message=(
+                        f"Dear Patient, {doc_display}'s chamber session today ({session_date}) has resumed. "
+                        f"Your appointment has been restored to today at {time_str} (Serial #{apt.serial_number}). "
+                        f"Fee remains paid."
+                    ),
+                    notification_type=NotificationType.SYSTEM,
+                    phone=apt.patient.phone
+                )
+            except Exception:
+                pass
+
+        # Re-align serial numbers on affected target dates
+        for t_date in target_dates:
+            remaining_target_apts = list(Appointment.objects.filter(
+                doctor_id=doctor_id,
+                clinic_id=clinic_id,
+                appointment_date=t_date
+            ).exclude(status=AppointmentStatus.CANCELLED).order_by('appointment_time', 'created_at'))
+
+            for idx, r_apt in enumerate(remaining_target_apts, start=1):
+                if r_apt.serial_number != idx:
+                    r_apt.serial_number = idx
+                    r_apt.save(update_fields=['serial_number', 'updated_at'])
+
+    return restored_list
 
 
 def calculate_dynamic_patient_eta(appointment: Appointment, session=None) -> dict:
